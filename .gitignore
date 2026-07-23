@@ -26,4 +26,7 @@ dist-ssr
 # Build outputs and executables
 dist-electron
 *.exe
+start-dev.cmd
+run-npm.cmd
+
 
