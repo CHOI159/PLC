@@ -83,7 +83,7 @@ select option {
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  z-index: 10;
+  z-index: 99999;
 }
 
 .brand {

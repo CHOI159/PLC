@@ -217,6 +217,15 @@ export default function Sidebar({
 
   const [draggedIndex, setDraggedIndex] = useState(null);
 
+  const [presetsViewMode, setPresetsViewMode] = useState(() => {
+    return localStorage.getItem('smart_home_presets_view_mode') || 'medium';
+  });
+
+  const handleViewModeChange = (mode) => {
+    setPresetsViewMode(mode);
+    localStorage.setItem('smart_home_presets_view_mode', mode);
+  };
+
   const handleDragStart = (e, index) => {
     if (
       e.target.tagName === 'BUTTON' || 
@@ -1095,11 +1104,98 @@ export default function Sidebar({
   // 快捷可选的 Lucide 兜底分类图标
   const availableIcons = ['Camera', 'Radio', 'Power', 'Cpu', 'Lightbulb', 'Shield', 'Sensor', 'Tv'];
 
-  const renderGridLibrary = () => (
+  const renderGridLibrary = () => {
+    const gridConfig = presetsViewMode === 'list'
+      ? { isList: true, minWidth: '100%', gap: '6px', iconSize: 28 }
+      : presetsViewMode === 'small'
+      ? { isList: false, minWidth: '100px', gap: '8px', iconSize: 36 }
+      : presetsViewMode === 'large'
+      ? { isList: false, minWidth: isPresetsManagerMode ? '210px' : '180px', gap: '14px', iconSize: 64 }
+      : { isList: false, minWidth: isPresetsManagerMode ? '170px' : '130px', gap: '10px', iconSize: 48 };
+
+    return (
     <div style={{ flex: 1.4, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <label style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '10px' }}>
-        {t('categoryListLabel')} ({activePresets.length} {lang === 'zh' ? '个' : 'items'})
-      </label>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <label style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)', margin: 0 }}>
+          {t('categoryListLabel')} ({activePresets.length} {lang === 'zh' ? '个' : 'items'})
+        </label>
+        
+        {/* 视图密度切换按钮组 */}
+        <div style={{ display: 'flex', background: 'rgba(0,0,0,0.3)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)', gap: '2px' }}>
+          <button
+            type="button"
+            onClick={() => handleViewModeChange('list')}
+            style={{
+              padding: '3px 6px',
+              borderRadius: '4px',
+              border: 'none',
+              background: presetsViewMode === 'list' ? 'var(--color-primary)' : 'transparent',
+              color: presetsViewMode === 'list' ? '#fff' : '#aaa',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="紧凑列表模式"
+          >
+            <Icons.List size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => handleViewModeChange('small')}
+            style={{
+              padding: '3px 6px',
+              borderRadius: '4px',
+              border: 'none',
+              background: presetsViewMode === 'small' ? 'var(--color-primary)' : 'transparent',
+              color: presetsViewMode === 'small' ? '#fff' : '#aaa',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="小图标模式"
+          >
+            <Icons.Grid size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => handleViewModeChange('medium')}
+            style={{
+              padding: '3px 6px',
+              borderRadius: '4px',
+              border: 'none',
+              background: presetsViewMode === 'medium' ? 'var(--color-primary)' : 'transparent',
+              color: presetsViewMode === 'medium' ? '#fff' : '#aaa',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="标准网格模式"
+          >
+            <Icons.LayoutGrid size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => handleViewModeChange('large')}
+            style={{
+              padding: '3px 6px',
+              borderRadius: '4px',
+              border: 'none',
+              background: presetsViewMode === 'large' ? 'var(--color-primary)' : 'transparent',
+              color: presetsViewMode === 'large' ? '#fff' : '#aaa',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="大图卡片模式"
+          >
+            <Icons.Square size={13} />
+          </button>
+        </div>
+      </div>
       
       {activePresets.length === 0 ? (
         <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px solid var(--border-color)', flex: 1 }}>
@@ -1179,13 +1275,82 @@ export default function Sidebar({
                 </div>
 
                 <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: `repeat(auto-fill, minmax(${isPresetsManagerMode ? '180px' : '130px'}, 1fr))`, 
-                  gap: isPresetsManagerMode ? '14px' : '10px' 
+                  display: gridConfig.isList ? 'flex' : 'grid', 
+                  flexDirection: gridConfig.isList ? 'column' : 'initial',
+                  gridTemplateColumns: gridConfig.isList ? 'none' : `repeat(auto-fill, minmax(${gridConfig.minWidth}, 1fr))`, 
+                  gap: gridConfig.gap 
                 }}>
                   {devicesInCat.map(preset => {
                     const originalIndex = activePresets.findIndex(p => p.type === preset.type);
                     const isCurrentlyDragging = draggedIndex === originalIndex;
+
+                    if (gridConfig.isList) {
+                      // 紧凑列表行样式
+                      return (
+                        <div
+                          key={preset.type}
+                          draggable
+                          onDragStart={(e) => handleDragStart(e, originalIndex)}
+                          onDragOver={(e) => handleDragOver(e, preset.type)}
+                          onDragEnd={handleDragEnd}
+                          className="preset-grid-card"
+                          style={{
+                            background: '#1e293b',
+                            border: isCurrentlyDragging ? '2px dashed var(--color-primary)' : '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            display: 'flex',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            cursor: 'grab',
+                            position: 'relative',
+                            opacity: isCurrentlyDragging ? 0.4 : 1,
+                            gap: '10px'
+                          }}
+                        >
+                          <div 
+                            style={{ 
+                              width: '28px', 
+                              height: '28px', 
+                              background: 'rgba(0,0,0,0.25)', 
+                              borderRadius: '6px', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center', 
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              border: '1px dashed rgba(255,255,255,0.15)',
+                              flexShrink: 0
+                            }}
+                            title="点击更换产品图标"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingIconPresetType(editingIconPresetType === preset.type ? null : preset.type);
+                            }}
+                          >
+                            {preset.customImg ? (
+                              <img src={preset.customImg} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="" />
+                            ) : (
+                              renderIcon(preset.icon || 'Cpu')
+                            )}
+                          </div>
+                          
+                          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {preset.name}
+                              </div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                {preset.model || '标准型'}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', flexShrink: 0 }}>
+                              ¥{preset.price}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
 
                     return (
                       <div
@@ -1199,7 +1364,7 @@ export default function Sidebar({
                           background: '#1e293b',
                           border: isCurrentlyDragging ? '2px dashed var(--color-primary)' : '1px solid rgba(255,255,255,0.08)',
                           borderRadius: isPresetsManagerMode ? '12px' : '8px',
-                          padding: isPresetsManagerMode ? '14px' : '8px',
+                          padding: presetsViewMode === 'small' ? '6px' : isPresetsManagerMode ? '14px' : '8px',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
@@ -1207,13 +1372,13 @@ export default function Sidebar({
                           position: 'relative',
                           opacity: isCurrentlyDragging ? 0.4 : 1,
                           transition: 'transform 0.1s, border-color 0.1s, opacity 0.1s',
-                          gap: isPresetsManagerMode ? '10px' : '5px' // 使用 flex gap 统一控制子元素纵向间距，防止穿模贴边
+                          gap: presetsViewMode === 'small' ? '4px' : isPresetsManagerMode ? '10px' : '5px'
                         }}
                       >
                         <div 
                           style={{ 
-                            width: isPresetsManagerMode ? '64px' : '48px', 
-                            height: isPresetsManagerMode ? '64px' : '48px', 
+                            width: `${gridConfig.iconSize}px`, 
+                            height: `${gridConfig.iconSize}px`, 
                             background: 'rgba(0,0,0,0.25)', 
                             borderRadius: '8px', 
                             display: 'flex', 
@@ -1466,6 +1631,7 @@ export default function Sidebar({
       )}
     </div>
   );
+};
 
   const renderAddForm = () => (
     <div style={{ flex: 0.6, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '24px', height: '100%', overflowY: 'auto' }} onWheel={(e) => e.stopPropagation()}>

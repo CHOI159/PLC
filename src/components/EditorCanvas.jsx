@@ -86,13 +86,26 @@ const getOffsetPoints = (points, offsetVal = 6) => {
   return offsetPoints;
 };
 
+const isPointInPolygon = (point, polygonPoints) => {
+  if (!polygonPoints || polygonPoints.length < 3) return false;
+  let x = point.x, y = point.y;
+  let inside = false;
+  for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
+    let xi = polygonPoints[i].x, yi = polygonPoints[i].y;
+    let xj = polygonPoints[j].x, yj = polygonPoints[j].y;
+    let intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi || 1) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+};
+
 export default function EditorCanvas({
   projectName,
   bgImage,
   devices,
   wires,
   selectedElement,
-  canvasMode, // 'select' | 'wire-live' | 'wire-neutral' | 'wire-live-neutral' | 'wire-knx' | 'wire-network'
+  canvasMode, // 'select' | 'wire-live' | 'wire-neutral' | 'wire-live-neutral' | 'wire-knx' | 'wire-network' | 'draw-room-polygon'
   scale,
   offset,
   onUpdateScale,
@@ -117,6 +130,8 @@ export default function EditorCanvas({
   onDuplicateTab,
   onRenameTab,
   onDeleteTab,
+  rooms = [],
+  onUpdateRooms,
   lang = 'zh'
 }) {
   const TRANSLATIONS = {
@@ -228,6 +243,97 @@ export default function EditorCanvas({
 
   const [isSpacePressed, setIsSpacePressed] = useState(false);
 
+  // 房间多边形绘制状态
+  const [activeRoomPoints, setActiveRoomPoints] = useState([]);
+  const [activeRoomMousePos, setActiveRoomMousePos] = useState(null);
+  const [roomModalOpen, setRoomModalOpen] = useState(false);
+  const [pendingRoomPoints, setPendingRoomPoints] = useState([]);
+  const [roomNameInput, setRoomNameInput] = useState('客厅');
+  const [roomColorInput, setRoomColorInput] = useState('#3b82f6');
+  // 房间重命名/改色二次编辑模态窗口状态
+  const [editingRoomModal, setEditingRoomModal] = useState(null);
+
+  // 动态检索归属于某个房间多边形的设备 (融合几何坐标落点碰撞与文字 room 属性)
+  const getDevicesInRoom = (room) => {
+    if (!room) return [];
+    return devices.filter(d => {
+      if (room.points && isPointInPolygon({ x: d.x, y: d.y }, room.points)) return true;
+      return (d.room || '未分配') === room.name;
+    });
+  };
+
+  // 可拖拽微型房间 Spotlight 浮窗状态
+  const [spotlightRoomId, setSpotlightRoomId] = useState(null);
+  const [floatingPanelPos, setFloatingPanelPos] = useState({ x: 20, y: 70 });
+  const [isDraggingFloatingPanel, setIsDraggingFloatingPanel] = useState(false);
+  const dragStartOffsetRef = useRef({ x: 0, y: 0 });
+
+  // 默认画线粗细/线宽 (px)
+  const [defaultWireWidth, setDefaultWireWidth] = useState(3.5);
+
+  // 房间印章显示模式与全局缩放比例 (解决低分辨率/小PX底图图片遮挡设备问题)
+  const [roomBadgeStyle, setRoomBadgeStyle] = useState('standard'); // 'standard' | 'compact' | 'minimal' | 'hidden'
+  const [roomBadgeScale, setRoomBadgeScale] = useState(0.85); // 默认0.85倍缩放适配
+
+  // 房间半透明颜色显示开关与浮动卡片收起/展开状态
+  const [showRoomColors, setShowRoomColors] = useState(true);
+  const [isRoomPanelCollapsed, setIsRoomPanelCollapsed] = useState(false);
+
+  // 动态同步选区状态：当取消选中房间或选择其他元素 (如设备/线缆/空白处) 时，重置房间高亮，虚线自动恢复
+  useEffect(() => {
+    if (selectedElement?.type !== 'room' && spotlightRoomId) {
+      setSpotlightRoomId(null);
+    }
+  }, [selectedElement, spotlightRoomId]);
+
+  // 全局监听可拖拽微型浮窗移动
+  useEffect(() => {
+    const handleMouseMoveFloating = (e) => {
+      if (isDraggingFloatingPanel) {
+        setFloatingPanelPos({
+          x: e.clientX - dragStartOffsetRef.current.x,
+          y: e.clientY - dragStartOffsetRef.current.y
+        });
+      }
+    };
+    const handleMouseUpFloating = () => {
+      if (isDraggingFloatingPanel) {
+        setIsDraggingFloatingPanel(false);
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMoveFloating);
+    window.addEventListener('mouseup', handleMouseUpFloating);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMoveFloating);
+      window.removeEventListener('mouseup', handleMouseUpFloating);
+    };
+  }, [isDraggingFloatingPanel]);
+
+  const handleSaveRoom = () => {
+    if (!roomNameInput.trim() || pendingRoomPoints.length < 3) return;
+    const rName = roomNameInput.trim();
+    const newRoom = {
+      id: 'room_' + Date.now(),
+      name: rName,
+      color: roomColorInput,
+      points: pendingRoomPoints
+    };
+
+    const updatedRooms = [...rooms, newRoom];
+    onUpdateRooms && onUpdateRooms(updatedRooms);
+
+    // 自动扫描全部设备，落入多边形内的设备归属到该房间
+    devices.forEach(dev => {
+      if (isPointInPolygon({ x: dev.x, y: dev.y }, pendingRoomPoints)) {
+        onUpdateDevice && onUpdateDevice(dev.id, { room: rName });
+      }
+    });
+
+    setRoomModalOpen(false);
+    setPendingRoomPoints([]);
+    onChangeCanvasMode && onChangeCanvasMode('select');
+  };
+
   // 监听键盘空格与 Escape
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -324,29 +430,39 @@ export default function EditorCanvas({
     return { ...coords, snapped: false };
   };
 
-  // 滚轮缩放
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const zoomIntensity = 0.08;
-    const rect = containerRef.current.getBoundingClientRect();
-    
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+  // 绑定非 Passive 滚轮缩放监听，彻底消除控制台 "Unable to preventDefault" 警告
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    const svgX = (mouseX - offset.x) / scale;
-    const svgY = (mouseY - offset.y) / scale;
+    const onNativeWheel = (e) => {
+      e.preventDefault();
+      const zoomIntensity = 0.08;
+      const rect = container.getBoundingClientRect();
+      
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
 
-    let newScale = scale + (e.deltaY < 0 ? 1 : -1) * zoomIntensity * scale;
-    newScale = Math.max(0.1, Math.min(newScale, 5.0));
+      const svgX = (mouseX - offset.x) / scale;
+      const svgY = (mouseY - offset.y) / scale;
 
-    const newOffsetX = mouseX - svgX * newScale;
-    const newOffsetY = mouseY - svgY * newScale;
+      let newScale = scale + (e.deltaY < 0 ? 1 : -1) * zoomIntensity * scale;
+      newScale = Math.max(0.1, Math.min(newScale, 5.0));
 
-    onUpdateScale(newScale);
-    onUpdateOffset({ x: newOffsetX, y: newOffsetY });
-    
-    if (contextMenu.show) setContextMenu({ show: false, x: 0, y: 0, targetId: null });
-  };
+      const newOffsetX = mouseX - svgX * newScale;
+      const newOffsetY = mouseY - svgY * newScale;
+
+      onUpdateScale(newScale);
+      onUpdateOffset({ x: newOffsetX, y: newOffsetY });
+      
+      if (contextMenu.show) setContextMenu({ show: false, x: 0, y: 0, targetId: null });
+    };
+
+    container.addEventListener('wheel', onNativeWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', onNativeWheel);
+    };
+  }, [scale, offset, contextMenu.show]);
 
   // 容器鼠标按下
   const handleContainerMouseDown = (e) => {
@@ -367,6 +483,26 @@ export default function EditorCanvas({
 
     if (e.button !== 0) return;
 
+    if (canvasMode === 'draw-room-polygon') {
+      const rawCoords = getSVGCoords(e.clientX, e.clientY);
+      const coords = getSnappedCoords(rawCoords);
+
+      if (activeRoomPoints.length >= 3) {
+        const firstP = activeRoomPoints[0];
+        const distToFirst = Math.hypot(coords.x - firstP.x, coords.y - firstP.y);
+        if (distToFirst < 20 / scale) {
+          setPendingRoomPoints([...activeRoomPoints]);
+          setRoomModalOpen(true);
+          setActiveRoomPoints([]);
+          setActiveRoomMousePos(null);
+          return;
+        }
+      }
+
+      setActiveRoomPoints(prev => [...prev, { x: coords.x, y: coords.y }]);
+      return;
+    }
+
     if (canvasMode.startsWith('wire')) {
       const rawCoords = getSVGCoords(e.clientX, e.clientY);
       const coords = getSnappedCoords(rawCoords);
@@ -382,6 +518,7 @@ export default function EditorCanvas({
         startOffset: { ...offset }
       });
       onSelectElement(null);
+      setSpotlightRoomId(null);
     }
   };
 
@@ -496,7 +633,12 @@ export default function EditorCanvas({
   // 容器MouseMove捕获
   const handleContainerMouseMove = (e) => {
     const coords = getSVGCoords(e.clientX, e.clientY);
-    setCurrentMousePos(getSnappedCoords(coords));
+    const snappedCoords = getSnappedCoords(coords);
+    setCurrentMousePos(snappedCoords);
+
+    if (canvasMode === 'draw-room-polygon') {
+      setActiveRoomMousePos(snappedCoords);
+    }
 
     if (!dragState.type) return;
 
@@ -534,10 +676,42 @@ export default function EditorCanvas({
 
       setAlignGuides({ x: alignX, y: alignY });
 
+      const finalX = Math.round(newX);
+      const finalY = Math.round(newY);
+      const containingRoom = rooms.find(r => isPointInPolygon({ x: finalX, y: finalY }, r.points));
+      const targetDev = devices.find(d => d.id === dragState.targetId);
+      const assignedRoom = containingRoom ? containingRoom.name : (targetDev?.room || '未分配');
+
       onUpdateDevice(dragState.targetId, {
-        x: Math.round(newX),
-        y: Math.round(newY)
+        x: finalX,
+        y: finalY,
+        room: assignedRoom
       });
+    } else if (dragState.type === 'room-vertex') {
+      const rawCoords = {
+        x: dragState.startPos.x + dx / scale,
+        y: dragState.startPos.y + dy / scale
+      };
+      const snapped = getSnappedCoords(rawCoords);
+      const targetRoom = rooms.find(r => r.id === dragState.targetId);
+      if (targetRoom) {
+        const updatedPoints = [...targetRoom.points];
+        updatedPoints[dragState.pointIndex] = { x: Math.round(snapped.x), y: Math.round(snapped.y) };
+        const updatedRooms = rooms.map(r => r.id === dragState.targetId ? { ...r, points: updatedPoints } : r);
+        onUpdateRooms && onUpdateRooms(updatedRooms);
+
+        // 实时重新计算归属于修改后多边形的全部设备
+        devices.forEach(dev => {
+          if (isPointInPolygon({ x: dev.x, y: dev.y }, updatedPoints)) {
+            onUpdateDevice && onUpdateDevice(dev.id, { room: targetRoom.name });
+          }
+        });
+      }
+    } else if (dragState.type === 'room-label') {
+      const labelX = Math.round(dragState.startPos.x + dx / scale);
+      const labelY = Math.round(dragState.startPos.y + dy / scale);
+      const updatedRooms = rooms.map(r => r.id === dragState.targetId ? { ...r, labelPos: { x: labelX, y: labelY } } : r);
+      onUpdateRooms && onUpdateRooms(updatedRooms);
     } else if (dragState.type === 'device-rotate') {
       const dyAngle = e.clientY - dragState.devCenterY;
       const dxAngle = e.clientX - dragState.devCenterX;
@@ -620,7 +794,8 @@ export default function EditorCanvas({
     onAddWire({
       type,
       color,
-      points: activeWirePoints
+      points: activeWirePoints,
+      strokeWidth: defaultWireWidth
     });
 
     setActiveWirePoints([]);
@@ -754,9 +929,17 @@ export default function EditorCanvas({
       if (presetData) {
         const rawCoords = getSVGCoords(e.clientX, e.clientY);
         const snapped = getSnappedCoords(rawCoords);
+        const dropX = Math.round(snapped.x);
+        const dropY = Math.round(snapped.y);
+
+        // 自动判定放置落点所在的多边形房间
+        const containingRoom = rooms.find(r => isPointInPolygon({ x: dropX, y: dropY }, r.points));
+        const assignedRoom = containingRoom ? containingRoom.name : (presetData.room || '未分配');
+
         onAddDevice(presetData, {
-          x: Math.round(snapped.x),
-          y: Math.round(snapped.y)
+          x: dropX,
+          y: dropY,
+          room: assignedRoom
         });
       }
     } catch (err) {
@@ -776,7 +959,6 @@ export default function EditorCanvas({
     <div
       ref={containerRef}
       className="canvas-container"
-      onWheel={handleWheel}
       onMouseDown={handleContainerMouseDown}
       onMouseMove={handleContainerMouseMove}
       onMouseUp={handleContainerMouseUp}
@@ -874,7 +1056,7 @@ export default function EditorCanvas({
           })}
           
           <button className="add-tab-btn" onClick={onAddTab}>
-            <Icons.Plus size={14} /> 新建区域
+            <Icons.Plus size={14} /> {lang === 'zh' ? '新建区域' : 'New Area'}
           </button>
         </div>
       </div>
@@ -883,8 +1065,8 @@ export default function EditorCanvas({
       {showCloneModal && (
         <div className="clone-modal-overlay" onMouseDown={(e) => e.stopPropagation()}>
           <div className="clone-modal">
-            <h3>复制标签区域选项</h3>
-            <p>请选择克隆模式，这会为当前区域「{activeTabId ? tabs.find(t=>t.id===activeTabId)?.name : ''}」创建一个副本：</p>
+            <h3>{lang === 'zh' ? '复制标签区域选项' : 'Duplicate Layout Area Options'}</h3>
+            <p>{lang === 'zh' ? `请选择克隆模式，这会为当前区域「${activeTabId ? tabs.find(t=>t.id===activeTabId)?.name : ''}」创建一个副本：` : `Select clone mode to create a duplicate for "${activeTabId ? tabs.find(t=>t.id===activeTabId)?.name : ''}":`}</p>
             <div className="clone-modal-actions">
               <button
                 className="btn btn-primary"
@@ -893,7 +1075,7 @@ export default function EditorCanvas({
                   setShowCloneModal(false);
                 }}
               >
-                克隆全部 (底图+设备+走线)
+                {lang === 'zh' ? '克隆全部 (底图+设备+走线)' : 'Clone All (Image, Devices & Wires)'}
               </button>
               <button
                 className="btn btn-secondary"
@@ -902,14 +1084,14 @@ export default function EditorCanvas({
                   setShowCloneModal(false);
                 }}
               >
-                仅复制底图 (无设备与连线)
+                {lang === 'zh' ? '仅复制底图 (无设备与连线)' : 'Clone Image Only (No Devices)'}
               </button>
               <button
                 className="btn btn-danger"
                 style={{ background: 'transparent', borderColor: 'transparent', color: '#9ca3af', marginTop: '4px' }}
                 onClick={() => setShowCloneModal(false)}
               >
-                取消
+                {lang === 'zh' ? '取消' : 'Cancel'}
               </button>
             </div>
           </div>
@@ -1101,6 +1283,90 @@ export default function EditorCanvas({
           <span style={{ position: 'absolute', bottom: 2, right: 2, fontSize: '7px', color: '#eab308', fontWeight: 700 }}>NET</span>
         </button>
 
+        {/* 不规则多边形房间/区域绘制工具 */}
+        <button
+          className={`btn-icon-only ${canvasMode === 'draw-room-polygon' ? 'active' : ''}`}
+          title="绘制不规则房间/区域 (多边形色块)"
+          onClick={() => {
+            onSelectElement(null);
+            setActiveWirePoints([]);
+            setActiveRoomPoints([]);
+            onChangeCanvasMode && onChangeCanvasMode('draw-room-polygon');
+          }}
+          style={{ position: 'relative' }}
+        >
+          <Icons.BoxSelect size={16} style={{ color: '#38bdf8' }} />
+          <span style={{ position: 'absolute', bottom: 2, right: 2, fontSize: '7px', color: '#38bdf8', fontWeight: 700 }}>ZONE</span>
+        </button>
+
+        {/* 默认画线粗细控制 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)', marginLeft: '2px' }} title="默认画线粗细 (线宽)">
+          <select
+            value={defaultWireWidth}
+            onChange={(e) => setDefaultWireWidth(parseFloat(e.target.value) || 3.5)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#60a5fa',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              outline: 'none'
+            }}
+          >
+            <option value={2}>{lang === 'zh' ? '2px 细线' : '2px Fine'}</option>
+            <option value={3.5}>{lang === 'zh' ? '3.5px 标准' : '3.5px Std'}</option>
+            <option value={5}>{lang === 'zh' ? '5px 粗线' : '5px Thick'}</option>
+            <option value={8}>{lang === 'zh' ? '8px 特粗' : '8px Heavy'}</option>
+            <option value={12}>{lang === 'zh' ? '12px 主干线' : '12px Trunk'}</option>
+          </select>
+        </div>
+
+        {/* 房间印章显示模式选择 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)', marginLeft: '2px' }} title={lang === 'zh' ? "房间印章显示样式" : "Room Stamp Style"}>
+          <select
+            value={roomBadgeStyle}
+            onChange={(e) => setRoomBadgeStyle(e.target.value)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#38bdf8',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              outline: 'none'
+            }}
+          >
+            <option value="standard">{lang === 'zh' ? '🏷️ 标准黑框' : '🏷️ Standard Pill'}</option>
+            <option value="compact">{lang === 'zh' ? '🏷️ 迷你小标' : '🏷️ Compact Pill'}</option>
+            <option value="minimal">{lang === 'zh' ? '🏷️ 无框纯字' : '🏷️ Borderless Text'}</option>
+            <option value="hidden">{lang === 'zh' ? '🙈 隐藏印章' : '🙈 Hide Stamps'}</option>
+          </select>
+        </div>
+
+        {/* 房间印章缩放比例选择 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)', marginLeft: '2px' }} title={lang === 'zh' ? "印章全局缩放（适配小PX底图）" : "Global Stamp Scale"}>
+          <select
+            value={roomBadgeScale}
+            onChange={(e) => setRoomBadgeScale(parseFloat(e.target.value) || 0.85)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#a855f7',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              outline: 'none'
+            }}
+          >
+            <option value={0.5}>{lang === 'zh' ? '🔍 印章 50%' : '🔍 Stamp 50%'}</option>
+            <option value={0.7}>{lang === 'zh' ? '🔍 印章 70%' : '🔍 Stamp 70%'}</option>
+            <option value={0.85}>{lang === 'zh' ? '🔍 印章 85%' : '🔍 Stamp 85%'}</option>
+            <option value={1.0}>{lang === 'zh' ? '🔍 印章 100%' : '🔍 Stamp 100%'}</option>
+            <option value={1.3}>{lang === 'zh' ? '🔍 印章 130%' : '🔍 Stamp 130%'}</option>
+          </select>
+        </div>
+
         <div className="toolbar-divider"></div>
 
         <button className="btn-icon-only" title={t('zoomIn')} onClick={() => onUpdateScale(Math.min(5.0, scale + 0.1))}>
@@ -1161,10 +1427,212 @@ export default function EditorCanvas({
           />
         )}
 
+        {/* 渲染半透明不规则房间/区域多边形色块 */}
+        {rooms.map(room => {
+          const isSelected = selectedElement?.type === 'room' && selectedElement.id === room.id;
+          const isSpotlight = spotlightRoomId === room.id;
+          const isAnySpotlight = Boolean(spotlightRoomId);
+          const opacity = showRoomColors
+            ? (isAnySpotlight ? (isSpotlight ? 0.35 : 0.05) : (isSelected ? 0.35 : 0.22))
+            : 0;
+          const strokeWidth = isSpotlight || isSelected ? 3 : 1.5;
+          const pointsStr = (room.points || []).map(p => `${p.x},${p.y}`).join(' ');
+
+          let centerX = 0, centerY = 0;
+          if (room.points && room.points.length > 0) {
+            let sumX = 0, sumY = 0;
+            room.points.forEach(p => { sumX += p.x; sumY += p.y; });
+            centerX = Math.round(sumX / room.points.length);
+            centerY = Math.round(sumY / room.points.length);
+          }
+
+          // 动态融合检测落入该房间区域的所有设备
+          const roomDevs = getDevicesInRoom(room);
+          const roomTotalCost = roomDevs.reduce((sum, d) => sum + (parseFloat(d.price) || 0), 0);
+
+          const badgeX = room.labelPos ? room.labelPos.x : centerX;
+          const badgeY = room.labelPos ? room.labelPos.y : centerY;
+          const isOffset = room.labelPos && (Math.hypot(badgeX - centerX, badgeY - centerY) > 10);
+
+          return (
+            <g key={room.id} className="room-polygon-group">
+              <polygon
+                points={pointsStr}
+                fill={room.color || '#3b82f6'}
+                fillOpacity={opacity}
+                stroke={room.color || '#3b82f6'}
+                strokeWidth={strokeWidth}
+                strokeDasharray={isSelected || isSpotlight ? 'none' : '4,4'}
+                style={{ transition: 'all 0.2s', cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (selectedElement?.type === 'room' && selectedElement.id === room.id) {
+                    onSelectElement(null);
+                    setSpotlightRoomId(null);
+                  } else {
+                    onSelectElement({ type: 'room', id: room.id });
+                    setSpotlightRoomId(room.id);
+                  }
+                }}
+              />
+
+              {/* 房间印章拖离质心时的辅助连接虚线 */}
+              {isOffset && (
+                <line
+                  x1={centerX}
+                  y1={centerY}
+                  x2={badgeX}
+                  y2={badgeY}
+                  stroke={room.color || '#3b82f6'}
+                  strokeWidth={1.2}
+                  strokeDasharray="3,3"
+                  opacity={0.65}
+                  style={{ pointerEvents: 'none' }}
+                />
+              )}
+
+              {/* 可独立按住拖拽的房间名称与设备统计印章 */}
+              {roomBadgeStyle !== 'hidden' && (
+                <g
+                  transform={`translate(${badgeX}, ${badgeY}) scale(${roomBadgeScale})`}
+                  style={{ cursor: 'move', pointerEvents: 'auto' }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    setDragState({
+                      type: 'room-label',
+                      targetId: room.id,
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      startPos: { x: badgeX, y: badgeY }
+                    });
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectElement({ type: 'room', id: room.id });
+                  }}
+                  title="按住左键可自由拖拽印章位置，避免遮挡设备"
+                >
+                  {roomBadgeStyle === 'standard' && (
+                    <>
+                      <rect
+                        x={-55}
+                        y={-14}
+                        width={110}
+                        height={28}
+                        rx={14}
+                        fill="#0f172a"
+                        fillOpacity={0.88}
+                        stroke={room.color || '#3b82f6'}
+                        strokeWidth={1.5}
+                      />
+                      <text x={0} y={-1} textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="700">
+                        {room.name}
+                      </text>
+                      <text x={0} y={9} textAnchor="middle" fill={room.color || '#3b82f6'} fontSize="8.5" fontWeight="600">
+                        {lang === 'zh' ? `${roomDevs.length}件 · ¥${roomTotalCost}` : `${roomDevs.length} pcs · RM ${roomTotalCost}`}
+                      </text>
+                    </>
+                  )}
+
+                  {roomBadgeStyle === 'compact' && (
+                    <>
+                      <rect
+                        x={-42}
+                        y={-10}
+                        width={84}
+                        height={20}
+                        rx={10}
+                        fill="#0f172a"
+                        fillOpacity={0.85}
+                        stroke={room.color || '#3b82f6'}
+                        strokeWidth={1.2}
+                      />
+                      <text x={0} y={4} textAnchor="middle" fill="#ffffff" fontSize="10" fontWeight="700">
+                        {room.name} ({roomDevs.length})
+                      </text>
+                    </>
+                  )}
+
+                  {roomBadgeStyle === 'minimal' && (
+                    <text
+                      x={0}
+                      y={4}
+                      textAnchor="middle"
+                      fill="#ffffff"
+                      fontSize="12"
+                      fontWeight="800"
+                      style={{
+                        stroke: '#0f172a',
+                        strokeWidth: '3px',
+                        paintOrder: 'stroke fill',
+                        filter: `drop-shadow(0 0 4px ${room.color || '#3b82f6'})`
+                      }}
+                    >
+                      {room.name}
+                    </text>
+                  )}
+                </g>
+              )}
+
+              {/* 选中时的多边形顶点可拖拽控制节点 */}
+              {isSelected && (room.points || []).map((p, pIdx) => (
+                <circle
+                  key={pIdx}
+                  cx={p.x}
+                  cy={p.y}
+                  r={6 / scale}
+                  fill="#ffffff"
+                  stroke={room.color || '#3b82f6'}
+                  strokeWidth={2.5}
+                  style={{ cursor: 'move', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))' }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    setDragState({
+                      type: 'room-vertex',
+                      targetId: room.id,
+                      pointIndex: pIdx,
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      startPos: { ...p }
+                    });
+                  }}
+                  title="按住拖拽微调房间拐角节点"
+                />
+              ))}
+            </g>
+          );
+        })}
+
+        {/* 正在绘制的多边形实时预览 */}
+        {canvasMode === 'draw-room-polygon' && activeRoomPoints.length > 0 && (
+          <g className="temp-room-polygon">
+            <polygon
+              points={activeRoomPoints.map(p => `${p.x},${p.y}`).join(' ') + (activeRoomMousePos ? ` ${activeRoomMousePos.x},${activeRoomMousePos.y}` : '')}
+              fill="rgba(56, 189, 248, 0.15)"
+              stroke="#38bdf8"
+              strokeWidth={2}
+              strokeDasharray="5,5"
+            />
+            {activeRoomPoints.map((p, idx) => (
+              <circle
+                key={idx}
+                cx={p.x}
+                cy={p.y}
+                r={idx === 0 ? 6 : 4}
+                fill={idx === 0 ? '#38bdf8' : '#ffffff'}
+                stroke="#38bdf8"
+                strokeWidth={2}
+              />
+            ))}
+          </g>
+        )}
+
         {/* 绘制强电及弱电多走线系统 */}
         {wires.map((wire) => {
           const isSelected = selectedElement?.type === 'wire' && selectedElement.id === wire.id;
           const pointsString = wire.points.map(p => `${p.x},${p.y}`).join(' ');
+          const wireWidth = wire.strokeWidth || (wire.type === 'knx' || wire.type === 'network' ? 4 : 3);
+          const wireWidthLN = wire.strokeWidth || 4.5;
 
           return (
             <g key={wire.id}>
@@ -1173,7 +1641,7 @@ export default function EditorCanvas({
                 points={pointsString}
                 className="svg-wire-bg-glow"
                 stroke={wire.type === 'live-neutral' ? '#ef4444' : wire.color}
-                style={{ strokeWidth: isSelected ? 12 : 8, display: isSelected ? 'block' : 'none' }}
+                style={{ strokeWidth: isSelected ? Math.max(12, wireWidth + 6) : wireWidth + 4, display: isSelected ? 'block' : 'none' }}
               />
               
               {/* 普通线路绘制 (非双色零火线) */}
@@ -1182,7 +1650,7 @@ export default function EditorCanvas({
                   points={pointsString}
                   className={`svg-wire ${isSelected ? 'selected' : ''}`}
                   stroke={wire.color}
-                  strokeWidth={wire.type === 'knx' || wire.type === 'network' ? 4 : 3}
+                  strokeWidth={wireWidth}
                   strokeDasharray={wire.type === 'neutral' ? '6,6' : 'none'}
                 />
               )}
@@ -1194,13 +1662,13 @@ export default function EditorCanvas({
                     points={pointsString}
                     className={`svg-wire ${isSelected ? 'selected' : ''}`}
                     stroke="#ef4444"
-                    strokeWidth={4.5}
+                    strokeWidth={wireWidthLN}
                     fill="none"
                   />
                   <polyline
                     points={getOffsetPoints(wire.points, 6).map(p => `${p.x},${p.y}`).join(' ')}
                     stroke="#3b82f6"
-                    strokeWidth={4.5}
+                    strokeWidth={wireWidthLN}
                     strokeDasharray="6,6"
                     fill="none"
                     style={{ pointerEvents: 'none' }}
@@ -1237,7 +1705,7 @@ export default function EditorCanvas({
                   canvasMode === 'wire-neutral' ? '#3b82f6' :
                   canvasMode === 'wire-knx' ? '#10b981' : '#eab308'
                 }
-                strokeWidth={canvasMode === 'wire-knx' || canvasMode === 'wire-network' ? 4 : 3}
+                strokeWidth={defaultWireWidth}
                 strokeDasharray={canvasMode === 'wire-neutral' ? '6,6' : 'none'}
                 style={{ opacity: 0.6 }}
               />
@@ -1570,6 +2038,531 @@ export default function EditorCanvas({
         )}
 
       </svg>
+
+      {/* 可拖拽微型房间 Spotlight 浮窗 */}
+      {rooms.length > 0 && (
+        isRoomPanelCollapsed ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: `${floatingPanelPos.x}px`,
+              top: `${floatingPanelPos.y}px`,
+              background: 'rgba(15, 23, 42, 0.9)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: '20px',
+              padding: '6px 12px',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+              zIndex: 90,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'grab',
+              color: '#f8fafc',
+              fontSize: '11px',
+              fontWeight: 700,
+              userSelect: 'none'
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setIsDraggingFloatingPanel(true);
+              dragStartOffsetRef.current = {
+                x: e.clientX - floatingPanelPos.x,
+                y: e.clientY - floatingPanelPos.y
+              };
+            }}
+          >
+            <Icons.GripHorizontal size={14} style={{ color: '#94a3b8' }} />
+            <Icons.BoxSelect size={14} style={{ color: '#38bdf8' }} />
+            <span>{lang === 'zh' ? `房间聚焦 (${rooms.length})` : `Room Area Focus (${rooms.length})`}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsRoomPanelCollapsed(false);
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#38bdf8',
+                cursor: 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+              title={lang === 'zh' ? "展开房间聚焦卡片" : "Expand Room Focus Panel"}
+            >
+              <Icons.ChevronDown size={14} />
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              position: 'absolute',
+              left: `${floatingPanelPos.x}px`,
+              top: `${floatingPanelPos.y}px`,
+              width: '235px',
+              background: 'rgba(15, 23, 42, 0.88)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: '12px',
+              boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
+              zIndex: 90,
+              userSelect: 'none',
+              overflow: 'hidden'
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* 拖拽 Handle Header */}
+            <div
+              style={{
+                padding: '8px 10px',
+                background: 'rgba(255,255,255,0.05)',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'grab',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#f8fafc'
+              }}
+              onMouseDown={(e) => {
+                setIsDraggingFloatingPanel(true);
+                dragStartOffsetRef.current = {
+                  x: e.clientX - floatingPanelPos.x,
+                  y: e.clientY - floatingPanelPos.y
+                };
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Icons.GripHorizontal size={14} style={{ color: '#94a3b8' }} />
+                <span>{lang === 'zh' ? `房间区域聚焦 (${rooms.length})` : `Room Spotlight (${rooms.length})`}</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                {/* 房间半透明色彩显/隐控制按钮 */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowRoomColors(prev => !prev);
+                  }}
+                  style={{
+                    background: showRoomColors ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                    border: `1px solid ${showRoomColors ? '#38bdf8' : 'rgba(255,255,255,0.2)'}`,
+                    color: showRoomColors ? '#38bdf8' : '#94a3b8',
+                    borderRadius: '4px',
+                    padding: '2px 5px',
+                    fontSize: '9.5px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px'
+                  }}
+                  title={showRoomColors ? (lang === 'zh' ? "点击关闭房间填色层" : "Hide room fill colors") : (lang === 'zh' ? "点击开启房间填色层" : "Show room fill colors")}
+                >
+                  {showRoomColors ? <Icons.Eye size={11} /> : <Icons.EyeOff size={11} />}
+                  <span>{showRoomColors ? (lang === 'zh' ? "开色" : "Color") : (lang === 'zh' ? "关色" : "Hide")}</span>
+                </button>
+
+                {spotlightRoomId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpotlightRoomId(null);
+                      onSelectElement(null);
+                    }}
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.2)',
+                      border: '1px solid #38bdf8',
+                      color: '#38bdf8',
+                      borderRadius: '4px',
+                      padding: '1px 5px',
+                      fontSize: '9px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {lang === 'zh' ? '重置' : 'Reset'}
+                  </button>
+                )}
+
+                {/* 折叠收起按钮 */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsRoomPanelCollapsed(true);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '2px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                  title={lang === 'zh' ? "收起为胶囊按钮" : "Collapse panel"}
+                >
+                  <Icons.ChevronUp size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* 房间列表 */}
+            <div style={{ padding: '8px', maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {rooms.map(room => {
+                const roomDevs = getDevicesInRoom(room);
+                const roomCost = roomDevs.reduce((sum, d) => sum + (parseFloat(d.price) || 0), 0);
+                const isSpotlighted = spotlightRoomId === room.id;
+
+                return (
+                  <div
+                    key={room.id}
+                    onClick={() => {
+                      if (selectedElement?.type === 'room' && selectedElement.id === room.id) {
+                        onSelectElement(null);
+                        setSpotlightRoomId(null);
+                      } else {
+                        onSelectElement({ type: 'room', id: room.id });
+                        setSpotlightRoomId(room.id);
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      background: isSpotlighted ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.02)',
+                      border: isSpotlighted ? '1px solid #38bdf8' : '1px solid transparent',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: room.color || '#3b82f6', flexShrink: 0 }} />
+                      <span style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {room.name}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                        {lang === 'zh' ? `${roomDevs.length}件 · ¥${roomCost}` : `${roomDevs.length} pcs · RM ${roomCost}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingRoomModal({ room, name: room.name, color: room.color || '#3b82f6' });
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+                        title="编辑房间名称与颜色"
+                      >
+                        <Icons.Edit3 size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUpdateRooms && onUpdateRooms(rooms.filter(r => r.id !== room.id));
+                          if (spotlightRoomId === room.id) setSpotlightRoomId(null);
+                        }}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', opacity: 0.6, cursor: 'pointer', padding: '2px' }}
+                        title="删除该房间区域"
+                      >
+                        <Icons.Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )
+      )}
+
+      {/* 房间多边形绘制完成后的命名与颜色分配弹窗 */}
+      {roomModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.65)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              width: '350px',
+              background: '#1e293b',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '20px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px'
+            }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Icons.BoxSelect size={18} style={{ color: '#38bdf8' }} />
+              <span>创建新房间/区域</span>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                房间/区域名称
+              </label>
+              <input
+                type="text"
+                value={roomNameInput}
+                onChange={(e) => setRoomNameInput(e.target.value)}
+                placeholder="请输入房间名称 (如：客厅)"
+                style={{
+                  width: '100%',
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  padding: '8px 12px',
+                  color: '#fff',
+                  fontSize: '13px',
+                  outline: 'none'
+                }}
+                autoFocus
+              />
+              
+              {/* 快捷选词 Chip 按钮组 */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                {['客厅', '主卧', '次卧', '厨房', '卫生间', '玄关', '阳台', '走廊/过道'].map(name => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setRoomNameInput(name)}
+                    style={{
+                      background: roomNameInput === name ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.05)',
+                      border: roomNameInput === name ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.1)',
+                      color: roomNameInput === name ? '#38bdf8' : '#ccc',
+                      borderRadius: '4px',
+                      padding: '3px 8px',
+                      fontSize: '10px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                区域标识颜色
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {['#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'].map(color => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setRoomColorInput(color)}
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: color,
+                      border: roomColorInput === color ? '2px solid #fff' : 'none',
+                      boxShadow: roomColorInput === color ? '0 0 8px ' + color : 'none',
+                      cursor: 'pointer'
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomModalOpen(false);
+                  setPendingRoomPoints([]);
+                }}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-muted)',
+                  borderRadius: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRoom}
+                style={{
+                  background: 'var(--color-primary)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '6px',
+                  padding: '6px 16px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                保存房间
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 房间重命名与改色二次编辑模态窗口 */}
+      {editingRoomModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.65)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              width: '350px',
+              background: '#1e293b',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '20px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px'
+            }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Icons.Edit3 size={18} style={{ color: '#38bdf8' }} />
+              <span>编辑房间/区域</span>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                房间/区域名称
+              </label>
+              <input
+                type="text"
+                value={editingRoomModal.name}
+                onChange={(e) => setEditingRoomModal({ ...editingRoomModal, name: e.target.value })}
+                placeholder="如：客厅、主卧、走廊"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  fontSize: '13px',
+                  outline: 'none'
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
+                主题标识颜色
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {['#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'].map(color => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setEditingRoomModal({ ...editingRoomModal, color })}
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: color,
+                      border: editingRoomModal.color === color ? '2px solid #fff' : 'none',
+                      boxShadow: editingRoomModal.color === color ? '0 0 8px ' + color : 'none',
+                      cursor: 'pointer'
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setEditingRoomModal(null)}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-muted)',
+                  borderRadius: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const oldName = editingRoomModal.room.name;
+                  const newName = editingRoomModal.name.trim() || oldName;
+                  const newColor = editingRoomModal.color;
+
+                  const updatedRooms = rooms.map(r => r.id === editingRoomModal.room.id ? { ...r, name: newName, color: newColor } : r);
+                  onUpdateRooms && onUpdateRooms(updatedRooms);
+
+                  devices.forEach(dev => {
+                    if (dev.room === oldName || (editingRoomModal.room.points && isPointInPolygon({ x: dev.x, y: dev.y }, editingRoomModal.room.points))) {
+                      onUpdateDevice && onUpdateDevice(dev.id, { room: newName });
+                    }
+                  });
+
+                  setEditingRoomModal(null);
+                }}
+                style={{
+                  background: 'var(--color-primary)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '6px',
+                  padding: '6px 16px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                保存修改
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

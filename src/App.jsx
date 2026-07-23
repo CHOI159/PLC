@@ -287,8 +287,20 @@ export default function App() {
   ]);
   const [activeTabId, setActiveTabId] = useState('tab_default');
 
+  const currentTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+  const currentRooms = currentTab?.rooms || [];
+
+  const handleUpdateRooms = (newRooms) => {
+    setTabs(prev => prev.map(tab => {
+      if (tab.id === activeTabId) {
+        return { ...tab, rooms: newRooms };
+      }
+      return tab;
+    }));
+  };
+
   const [selectedElement, setSelectedElement] = useState(null); // { type: 'device'|'wire', id }
-  const [canvasMode, setCanvasMode] = useState('select'); // 'select' | 'wire-live' | 'wire-neutral'
+  const [canvasMode, setCanvasMode] = useState('select'); // 'select' | 'wire-live' | 'wire-neutral' | 'draw-room-polygon'
   
   // 视角偏移状态
   const [scale, setScale] = useState(1.0);
@@ -1174,7 +1186,7 @@ export default function App() {
                 borderRadius: '8px',
                 padding: '6px 0',
                 boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
-                zIndex: 9999,
+                zIndex: 100000,
                 width: '180px',
                 display: 'flex',
                 flexDirection: 'column'
@@ -1545,6 +1557,8 @@ export default function App() {
             onDuplicateTab={handleDuplicateTab}
             onRenameTab={handleRenameTab}
             onDeleteTab={handleDeleteTab}
+            rooms={currentRooms}
+            onUpdateRooms={handleUpdateRooms}
             lang={lang}
           />
 
@@ -1592,6 +1606,8 @@ export default function App() {
               onDeleteDeviceGroup={handleDeleteDeviceGroup}
               activeTabName={activeTab.name}
               onFocusDeviceModel={handleFocusDeviceModel} // 传递循环定位回调
+              rooms={currentRooms}
+              onUpdateRooms={handleUpdateRooms}
               lang={lang}
             />
           </div>
@@ -1609,10 +1625,10 @@ export default function App() {
           return (
             <div className="print-page" key={tab.id}>
               <div className="print-header">
-                <h2>智能家居布线图 - {tab.name}</h2>
+                <h2>{lang === 'en' ? `Smart Home Wiring Diagram - ${tab.name}` : `智能家居布线图 - ${tab.name}`}</h2>
                 <div className="print-header-meta">
-                  <div>项目名称：{projectName}</div>
-                  <div>导出日期：{new Date().toLocaleDateString('zh-CN')}</div>
+                  <div>{lang === 'en' ? 'Project Name: ' : '项目名称：'}{projectName}</div>
+                  <div>{lang === 'en' ? 'Export Date: ' : '导出日期：'}{new Date().toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')}</div>
                 </div>
               </div>
 
@@ -1778,7 +1794,7 @@ export default function App() {
                               return (
                                 <tr>
                                   <td colSpan="3" style={{ textAlign: 'center', color: '#666', fontSize: '9px', padding: '4px' }}>
-                                    暂未布置智能产品
+                                    {lang === 'zh' ? '暂未布置智能产品' : 'No products assigned'}
                                   </td>
                                 </tr>
                               );
@@ -1790,7 +1806,7 @@ export default function App() {
                                   <span style={{ verticalAlign: 'middle', display: 'inline-block' }}>{item.name}</span>
                                 </td>
                                 <td>{item.model}</td>
-                                <td style={{ fontWeight: 700 }}>{item.count} 台</td>
+                                <td style={{ fontWeight: 700 }}>{item.count} {lang === 'zh' ? '台' : 'pcs'}</td>
                               </tr>
                             ));
                           })()}
@@ -1799,43 +1815,43 @@ export default function App() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ color: '#888', fontSize: '14px', textAlign: 'center', padding: '80px 0' }}>该区域未上传平面图纸</div>
+                  <div style={{ color: '#888', fontSize: '14px', textAlign: 'center', padding: '80px 0' }}>{lang === 'zh' ? '该区域未上传平面图纸' : 'No floorplan uploaded for this area'}</div>
                 )}
               </div>
 
               {/* 打印图例说明栏目 */}
               <div className="print-legend">
-                <div className="print-legend-title">图例说明 ({tab.name})：</div>
+                <div className="print-legend-title">{lang === 'zh' ? `图例说明 (${tab.name})：` : `Wiring Legend (${tab.name}):`}</div>
                 <div className="print-legend-items">
                   <div className="print-legend-item">
                     <span style={{ display: 'inline-block', width: '30px', height: '4px', backgroundColor: '#ef4444' }} />
-                    <span>红色实线：火线 (L)</span>
+                    <span>{lang === 'zh' ? '红色实线：火线 (L)' : 'Red Line: Live (L)'}</span>
                   </div>
                   <div className="print-legend-item">
                     <span style={{ display: 'inline-block', width: '30px', height: '4px', borderTop: '4px dashed #3b82f6' }} />
-                    <span>蓝色虚线：零线 (N)</span>
+                    <span>{lang === 'zh' ? '蓝色虚线：零线 (N)' : 'Blue Dashed: Neutral (N)'}</span>
                   </div>
                   <div className="print-legend-item" style={{ display: 'flex', alignItems: 'center' }}>
                     <div style={{ position: 'relative', width: '30px', height: '10px' }}>
                       <span style={{ position: 'absolute', top: 1, left: 0, display: 'inline-block', width: '30px', height: '3px', backgroundColor: '#ef4444' }} />
                       <span style={{ position: 'absolute', top: 5, left: 0, display: 'inline-block', width: '30px', height: '3px', borderTop: '3px dashed #3b82f6' }} />
                     </div>
-                    <span style={{ marginLeft: '6px' }}>红蓝并列：零火双绞并行线 (LN)</span>
+                    <span style={{ marginLeft: '6px' }}>{lang === 'zh' ? '红蓝并列：零火双绞并行线 (LN)' : 'Red-Blue Parallel: Live & Neutral (LN)'}</span>
                   </div>
                   <div className="print-legend-item">
                     <span style={{ display: 'inline-block', width: '30px', height: '4px', backgroundColor: '#10b981' }} />
-                    <span>绿色粗线：KNX 控制总线</span>
+                    <span>{lang === 'zh' ? '绿色粗线：KNX 控制总线' : 'Green Line: KNX Control Bus'}</span>
                   </div>
                   <div className="print-legend-item">
                     <span style={{ display: 'inline-block', width: '30px', height: '4px', backgroundColor: '#eab308' }} />
-                    <span>黄色粗线：弱电网线</span>
+                    <span>{lang === 'zh' ? '黄色粗线：弱电网线' : 'Yellow Line: Cat6 Network Cable'}</span>
                   </div>
                 </div>
               </div>
 
               <div className="print-footer">
-                <span>智能家居系统设计方案</span>
-                <span>第 {idx + 1} 页，共 {tabs.length + 1} 页</span>
+                <span>{lang === 'zh' ? '智能家居系统设计方案' : 'Smart Home System Design Plan'}</span>
+                <span>{lang === 'zh' ? `第 ${idx + 1} 页，共 ${tabs.length + 1} 页` : `Page ${idx + 1} of ${tabs.length + 1}`}</span>
               </div>
             </div>
           );
@@ -1843,29 +1859,31 @@ export default function App() {
 
         <div className="print-page">
           <div className="print-header">
-            <h2>智能家居产品配置与汇总报价单</h2>
+            <h2>{lang === 'zh' ? '智能家居产品配置与汇总报价单' : 'Smart Home Equipment Summary & Quote Proposal'}</h2>
             <div className="print-header-meta">
-              <div>项目名称：{projectName}</div>
-              <div>报价日期：{new Date().toLocaleDateString('zh-CN')}</div>
+              <div>{lang === 'zh' ? '项目名称：' : 'Project Name: '}{projectName}</div>
+              <div>{lang === 'zh' ? '报价日期：' : 'Quote Date: '}{new Date().toLocaleDateString(lang === 'en' ? 'en-US' : 'zh-CN')}</div>
             </div>
           </div>
 
           <div className="print-bill">
-            <h3 className="print-bill-title">全屋设备汇总清单</h3>
+            <h3 className="print-bill-title">{lang === 'zh' ? '全屋设备汇总清单' : 'Whole House Equipment Summary'}</h3>
             <table className="print-table">
               <thead>
                 <tr>
-                  <th style={{ width: '40%' }}>产品名称</th>
-                  <th style={{ width: '30%' }}>规格型号</th>
-                  <th style={{ width: '15%' }}>单价</th>
-                  <th style={{ width: '15%' }}>汇总数量</th>
-                  <th style={{ width: '15%' }}>小计</th>
+                  <th style={{ width: '40%' }}>{lang === 'zh' ? '产品名称' : 'Product Name'}</th>
+                  <th style={{ width: '30%' }}>{lang === 'zh' ? '规格型号' : 'Spec / Model'}</th>
+                  <th style={{ width: '15%' }}>{lang === 'zh' ? '单价' : 'Unit Price'}</th>
+                  <th style={{ width: '15%' }}>{lang === 'zh' ? '汇总数量' : 'Total Qty'}</th>
+                  <th style={{ width: '15%' }}>{lang === 'zh' ? '小计' : 'Subtotal'}</th>
                 </tr>
               </thead>
               <tbody>
                 {deviceStats.length === 0 ? (
                   <tr>
-                    <td colSpan="5" style={{ textAlign: 'center', color: '#666' }}>全屋标签页中均未放置任何设备</td>
+                    <td colSpan="5" style={{ textAlign: 'center', color: '#666' }}>
+                      {lang === 'zh' ? '全屋标签页中均未放置任何设备' : 'No devices placed in any layout tab'}
+                    </td>
                   </tr>
                 ) : (
                   deviceStats.map((item, index) => (
@@ -1883,29 +1901,29 @@ export default function App() {
 
             <div className="print-total-section">
               <div className="print-total-row">
-                <span>设备硬件总合价：</span>
+                <span>{lang === 'zh' ? '设备硬件总合价：' : 'Hardware Subtotal:'}</span>
                 <span>RM {devicesTotal.toFixed(2)}</span>
               </div>
               <div className="print-total-row">
-                <span>现场安装与系统调试费：</span>
+                <span>{lang === 'zh' ? '现场安装与系统调试费：' : 'Installation & Setup Fee:'}</span>
                 <span>RM {laborCost.toFixed(2)}</span>
               </div>
               {discountPercent > 0 && (
                 <div className="print-total-row" style={{ color: '#ef4444' }}>
-                  <span>整单专属折让 (减免 {discountPercent}%)：</span>
+                  <span>{lang === 'zh' ? `整单专属折让 (减免 ${discountPercent}%)：` : `Discount (-${discountPercent}%):`}</span>
                   <span>- RM {(devicesTotal * discountPercent / 100).toFixed(2)}</span>
                 </div>
               )}
               <div className="print-total-row final">
-                <span>全屋项目总计报价：</span>
+                <span>{lang === 'zh' ? '全屋项目总计报价：' : 'Total Project Quote:'}</span>
                 <span>RM {finalTotal.toFixed(2)}</span>
               </div>
             </div>
           </div>
 
           <div className="print-footer">
-            <span>智能家居系统设计方案</span>
-            <span>第 {tabs.length + 1} 页，共 {tabs.length + 1} 页</span>
+            <span>{lang === 'zh' ? '智能家居系统设计方案' : 'Smart Home System Design Plan'}</span>
+            <span>{lang === 'zh' ? `第 ${tabs.length + 1} 页，共 ${tabs.length + 1} 页` : `Page ${tabs.length + 1} of ${tabs.length + 1}`}</span>
           </div>
         </div>
       </div>

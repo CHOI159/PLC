@@ -16,6 +16,8 @@ export default function PropertyPanel({
   onDeleteDeviceGroup,
   activeTabName,
   onFocusDeviceModel, // 新增循环定位视角回调
+  rooms = [],
+  onUpdateRooms,
   lang = 'zh'
 }) {
   const TRANSLATIONS = {
@@ -156,13 +158,18 @@ export default function PropertyPanel({
     const defaultRooms = lang === 'zh'
       ? ['未分配', '客厅', '主卧', '次卧', '厨房', '卫生间']
       : ['Unassigned', 'Living Room', 'Master Bed', 'Second Bed', 'Kitchen', 'Bathroom'];
-    const rooms = new Set(defaultRooms);
+    const roomsSet = new Set(defaultRooms);
+    if (Array.isArray(rooms)) {
+      rooms.forEach(r => {
+        if (r.name) roomsSet.add(r.name);
+      });
+    }
     devices.forEach(d => {
       if (d.room) {
-        rooms.add(d.room);
+        roomsSet.add(d.room);
       }
     });
-    return Array.from(rooms);
+    return Array.from(roomsSet);
   };
   const existingRooms = getExistingRooms();
 
@@ -803,18 +810,60 @@ export default function PropertyPanel({
                       </span>
                     </div>
                   </div>
+
+                  {/* 线缆粗细/线宽调节 */}
+                  <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>线缆粗细 / 宽度</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                        <input
+                          type="number"
+                          min="1"
+                          max="15"
+                          step="0.5"
+                          style={{
+                            width: '52px',
+                            padding: '2px 4px',
+                            fontSize: '11.5px',
+                            background: 'rgba(0,0,0,0.25)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--color-primary)',
+                            fontWeight: 600,
+                            borderRadius: '4px',
+                            textAlign: 'right'
+                          }}
+                          value={selectedWire.strokeWidth || (selectedWire.type === 'knx' || selectedWire.type === 'network' ? 4 : 3)}
+                          onChange={(e) => {
+                            const val = Math.max(1, Math.min(15, parseFloat(e.target.value) || 3));
+                            onUpdateWire(selectedWire.id, { strokeWidth: val });
+                          }}
+                        />
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>px</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="15"
+                      step="0.5"
+                      style={{ width: '100%', accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                      value={selectedWire.strokeWidth || (selectedWire.type === 'knx' || selectedWire.type === 'network' ? 4 : 3)}
+                      onChange={(e) => onUpdateWire(selectedWire.id, { strokeWidth: parseFloat(e.target.value) || 3 })}
+                    />
+                  </div>
+
                   <button
                     className="btn btn-danger"
                     style={{ width: '100%', marginTop: '10px' }}
                     onClick={() => onDeleteElement(selectedWire.id, 'wire')}
                   >
-                    <Trash2 size={13} /> 删除此线路
+                    <Trash2 size={13} /> {lang === 'zh' ? '删除此线路' : 'Delete Wire'}
                   </button>
                 </div>
               ) : (
                 <div className="empty-state">
                   <ShieldAlert size={18} />
-                  <p>在画布上选择任意设备或线路，即可在此编辑其属性参数。</p>
+                  <p>{lang === 'zh' ? '在画布上选择任意设备或线路，即可在此编辑其属性参数。' : 'Select any device or wire on canvas to edit its properties.'}</p>
                 </div>
               )}
               </div>
@@ -833,7 +882,7 @@ export default function PropertyPanel({
             onClick={() => setIsListOpen(!isListOpen)}
             title="点击展开或收起"
           >
-            <span>全屋产品统计 ({devices.length}件)</span>
+            <span>{lang === 'zh' ? `全屋产品统计 (${devices.length}件)` : `Whole House Products (${devices.length} pcs)`}</span>
             {isListOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </div>
           
@@ -845,7 +894,7 @@ export default function PropertyPanel({
               <div className="section-content-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {deviceStats.length === 0 ? (
                 <div className="empty-state">
-                  <p>暂无产品。请从左侧拖动或点击添加设备。</p>
+                  <p>{lang === 'zh' ? '暂无产品。请从左侧拖动或点击添加设备。' : 'No products. Drag or click devices from sidebar to add.'}</p>
                 </div>
               ) : (
                 <div>
@@ -928,7 +977,7 @@ export default function PropertyPanel({
                               <button
                                 className="trash-btn"
                                 onClick={() => onDeleteDeviceGroup(item.model)}
-                                title="清空该型号的设备"
+                                title={lang === 'zh' ? '清空该型号的设备' : 'Clear all devices of this model'}
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -956,7 +1005,7 @@ export default function PropertyPanel({
             onClick={() => setIsSummaryOpen(!isSummaryOpen)}
             title="点击展开或收起"
           >
-            <span>工程结算汇总</span>
+            <span>{lang === 'zh' ? '工程结算汇总' : 'Financial Summary'}</span>
             {isSummaryOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </div>
           
