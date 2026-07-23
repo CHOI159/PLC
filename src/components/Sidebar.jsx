@@ -155,7 +155,8 @@ export default function Sidebar({
       descPlaceholder: "如：描述智能产品的功能特点",
       addSuccess: "产品已成功保存并录入产品库！",
       productLibraryTitle: "智能产品库",
-      noPresetInCat: "暂无产品"
+      noPresetInCat: "暂无产品",
+      manageDb: "管理产品库"
     },
     en: {
       productDbTitle: "Product Database Manager (Workspace)",
@@ -191,7 +192,8 @@ export default function Sidebar({
       descPlaceholder: "e.g., descriptions of smart device functions",
       addSuccess: "Product successfully saved to library!",
       productLibraryTitle: "Smart Products",
-      noPresetInCat: "No devices"
+      noPresetInCat: "No devices",
+      manageDb: "Manage Database"
     }
   };
 
