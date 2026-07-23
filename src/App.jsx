@@ -275,6 +275,11 @@ export default function App() {
   // 自定义 Dialog 弹窗状态 (替代 window.prompt 和 confirm 以免在 Electron 打包环境中失效)
   const [promptDialog, setPromptDialog] = useState({ show: false, title: '', defaultValue: '', onSubmit: null });
   const [confirmDialog, setConfirmDialog] = useState({ show: false, title: '', message: '', onConfirm: null });
+  const [alertDialog, setAlertDialog] = useState({ show: false, title: '', message: '' });
+
+  const showAlert = (title, message) => {
+    setAlertDialog({ show: true, title, message });
+  };
   
   // 多标签页数据结构
   const [tabs, setTabs] = useState([
@@ -293,17 +298,22 @@ export default function App() {
   // 1. 切换当前的方案版本
   const handleSwitchVersion = (targetVersionId) => {
     if (targetVersionId === activeVersionId) return;
-    // 先将当前的活跃图纸和报价状态备份同步回当前版本的记录中
-    setVersions(prev => prev.map(v => v.id === activeVersionId ? { ...v, tabs, extraCosts } : v));
     
-    // 载入新方案版本的状态
-    const targetVer = versions.find(v => v.id === targetVersionId);
-    if (targetVer) {
-      setTabs(targetVer.tabs || []);
-      setExtraCosts(targetVer.extraCosts || { labor: '', discount: 0 });
-      setActiveVersionId(targetVersionId);
-      setSelectedElement(null);
-    }
+    // 将当前的活跃图纸和报价状态备份同步回当前版本，并无缝切至目标版本
+    setVersions(prev => {
+      const updatedVersions = prev.map(v => 
+        v.id === activeVersionId ? { ...v, tabs, extraCosts } : v
+      );
+      
+      const targetVer = updatedVersions.find(v => v.id === targetVersionId);
+      if (targetVer) {
+        setTabs(targetVer.tabs || []);
+        setExtraCosts(targetVer.extraCosts || { labor: '', discount: 0 });
+        setActiveVersionId(targetVersionId);
+        setSelectedElement(null);
+      }
+      return updatedVersions;
+    });
   };
 
   // 2. 复制当前方案为一个新方案快照
@@ -625,18 +635,23 @@ export default function App() {
 
   // 新建项目
   const handleNewProject = () => {
-    if (window.confirm('确定要新建整个项目吗？所有标签页和未保存的数据都会清空！')) {
-      setProjectName('智能家居平面布线与报价项目');
-      setTabs([
-        { id: 'tab_default', name: '一楼布线图', bgImage: null, devices: [], wires: [] }
-      ]);
-      setActiveTabId('tab_default');
-      setSelectedElement(null);
-      setCanvasMode('select');
-      setScale(1.0);
-      setOffset({ x: 0, y: 0 });
-      setExtraCosts({ labor: '', discount: 0 });
-    }
+    setConfirmDialog({
+      show: true,
+      title: '新建整个项目确认',
+      message: '确定要新建整个项目吗？所有标签页、方案版本和未保存的数据都会被清空！',
+      onConfirm: () => {
+        setProjectName('智能家居平面布线与报价项目');
+        setTabs([
+          { id: 'tab_default', name: '一楼布线图', bgImage: null, devices: [], wires: [] }
+        ]);
+        setActiveTabId('tab_default');
+        setSelectedElement(null);
+        setCanvasMode('select');
+        setScale(1.0);
+        setOffset({ x: 0, y: 0 });
+        setExtraCosts({ labor: '', discount: 0 });
+      }
+    });
   };
 
   // 新建 Tab
@@ -808,15 +823,20 @@ export default function App() {
   const handleDeleteDeviceGroup = (model) => {
     const modelDevicesCount = activeTab.devices.filter(d => d.model === model).length;
     if (modelDevicesCount === 0) {
-      alert(`当前区域「${activeTab.name}」中并没有该型号设备。其他区域的设备请切换到对应Tab后进行删除。`);
+      showAlert('提示', `当前区域「${activeTab.name}」中并没有该型号设备。其他区域的设备请切换到对应Tab后进行删除。`);
       return;
     }
-    if (window.confirm(`确定要删除当前区域「${activeTab.name}」中所有型号为「${model}」的产品吗？`)) {
-      updateActiveTab({
-        devices: activeTab.devices.filter(d => d.model !== model)
-      });
-      setSelectedElement(null);
-    }
+    setConfirmDialog({
+      show: true,
+      title: '批量删除设备确认',
+      message: `确定要删除当前区域「${activeTab.name}」中所有型号为「${model}」的产品吗？`,
+      onConfirm: () => {
+        updateActiveTab({
+          devices: activeTab.devices.filter(d => d.model !== model)
+        });
+        setSelectedElement(null);
+      }
+    });
   };
 
   // 更新当前设备属性
@@ -1004,9 +1024,9 @@ export default function App() {
     if (window.electronAPI) {
       const res = await window.electronAPI.saveProject(state);
       if (res.success) {
-        alert(`项目已成功保存至：\n${res.filePath}`);
+        showAlert('保存成功', `项目已成功保存至：\n${res.filePath}`);
       } else if (!res.cancelled) {
-        alert(`保存失败：${res.error}`);
+        showAlert('保存失败', res.error);
       }
     } else {
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
@@ -1026,7 +1046,7 @@ export default function App() {
       if (res.success && res.projectData) {
         loadProjectState(res.projectData);
       } else if (!res.cancelled && res.error) {
-        alert(`载入项目失败：${res.error}`);
+        showAlert('导入失败', `载入项目失败：${res.error}`);
       }
     } else {
       const fileInput = document.createElement('input');
@@ -1041,7 +1061,7 @@ export default function App() {
             const data = JSON.parse(event.target.result);
             loadProjectState(data);
           } catch (err) {
-            alert('文件解析失败，请上传正确的布线项目文件。');
+            showAlert('导入失败', '文件解析失败，请上传正确的布线项目文件。');
           }
         };
         reader.readAsText(file);
@@ -1056,9 +1076,9 @@ export default function App() {
       document.activeElement?.blur();
       const res = await window.electronAPI.exportPDF(`${projectName}_报价单.pdf`);
       if (res.success) {
-        alert(`PDF 报价单已成功导出至：\n${res.filePath}`);
+        showAlert('PDF 导出成功', `PDF 报价单已成功导出至：\n${res.filePath}`);
       } else if (!res.cancelled) {
-        alert(`导出 PDF 失败：${res.error}`);
+        showAlert('PDF 导出失败', res.error);
       }
     } else {
       window.print();
@@ -2012,6 +2032,47 @@ export default function App() {
                   confirmDialog.onConfirm();
                   setConfirmDialog({ show: false, title: '', message: '', onConfirm: null });
                 }}
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 自定义 Alert 消息提示弹窗 */}
+      {alertDialog.show && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: 'rgba(0, 0, 0, 0.65)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div style={{
+            background: '#1e293b',
+            border: '1px solid var(--border-color)',
+            borderRadius: '12px',
+            padding: '20px',
+            width: '360px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}>
+            <h4 style={{ margin: 0, color: '#fff', fontSize: '14px', fontWeight: 600 }}>{alertDialog.title}</h4>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{alertDialog.message}</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+              <button
+                className="btn btn-primary"
+                style={{ padding: '4px 14px', fontSize: '12px', height: '28px' }}
+                onClick={() => setAlertDialog({ show: false, title: '', message: '' })}
               >
                 确定
               </button>

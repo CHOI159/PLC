@@ -218,6 +218,17 @@ export default function Sidebar({
   const [draggedIndex, setDraggedIndex] = useState(null);
 
   const handleDragStart = (e, index) => {
+    if (
+      e.target.tagName === 'BUTTON' || 
+      e.target.closest('button') || 
+      e.target.tagName === 'INPUT' || 
+      e.target.closest('input') || 
+      e.target.tagName === 'SELECT' ||
+      e.target.closest('select')
+    ) {
+      e.preventDefault();
+      return;
+    }
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -253,6 +264,7 @@ export default function Sidebar({
 
   const [showModal, setShowModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState({ show: false, type: null, name: '' });
   const [pendingMergeItems, setPendingMergeItems] = useState([]);
 
   // 产品库浮动弹窗拖拽位置状态
@@ -364,16 +376,14 @@ export default function Sidebar({
           merged.push(c);
         }
       });
-      const filtered = merged.filter(c => 
+      return merged.filter(c => 
         c === 'smart-home' || c === 'camera' || c === 'security' || currentCats.includes(c)
       );
-
-      // 如果当前表单选中的分类被过滤消失了，重置回默认的 smart-home
-      if (category && category !== 'smart-home' && category !== 'camera' && category !== 'security' && !filtered.includes(category)) {
-        setCategory('smart-home');
-      }
-      return filtered;
     });
+
+    if (category && category !== 'smart-home' && category !== 'camera' && category !== 'security' && !currentCats.includes(category)) {
+      setCategory('smart-home');
+    }
   }, [activePresets.length]);
 
   // 当在表单选择分类下拉菜单时触发
@@ -526,12 +536,87 @@ export default function Sidebar({
   };
 
   // 删除自定义预设
-  const handleDeletePreset = (e, type) => {
+  const handleDeletePreset = (e, preset) => {
     e.stopPropagation();
+    e.preventDefault();
     setDraggedIndex(null); // 在删除产品预设前强制清空拖动中的索引焦点，阻断越界冲突与崩溃
-    if (window.confirm('确定要从产品库中永久删除此产品预设吗？')) {
-      onUpdateCustomPresets(activePresets.filter(p => p.type !== type));
+    setEditingIconPresetType(null); // 清空正在修改图标的状态
+    setDeleteConfirmModal({
+      show: true,
+      type: preset.type,
+      name: preset.name || preset.type
+    });
+  };
+
+  const handleConfirmDeletePreset = () => {
+    if (deleteConfirmModal.type) {
+      onUpdateCustomPresets(activePresets.filter(p => p.type !== deleteConfirmModal.type));
     }
+    setDeleteConfirmModal({ show: false, type: null, name: '' });
+  };
+
+  const renderDeleteConfirmModal = () => {
+    if (!deleteConfirmModal.show) return null;
+    return (
+      <div 
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.65)',
+          backdropFilter: 'blur(4px)',
+          zIndex: 3500,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
+        onClick={() => setDeleteConfirmModal({ show: false, type: null, name: '' })}
+      >
+        <div 
+          style={{
+            background: '#1e293b',
+            border: '1px solid var(--border-color)',
+            borderRadius: '12px',
+            padding: '20px 24px',
+            width: '380px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h4 style={{ margin: 0, color: '#fff', fontSize: '15px', fontWeight: 600 }}>
+            {lang === 'zh' ? '删除产品确认' : 'Delete Product Confirmation'}
+          </h4>
+          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '13px', lineHeight: 1.5 }}>
+            {lang === 'zh' 
+              ? `确定要从产品库中永久删除产品「${deleteConfirmModal.name || '此产品'}」吗？` 
+              : `Are you sure you want to permanently delete product "${deleteConfirmModal.name || 'this product'}"?`}
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: '6px 14px', fontSize: '12px' }}
+              onClick={() => setDeleteConfirmModal({ show: false, type: null, name: '' })}
+            >
+              {lang === 'zh' ? '取消' : 'Cancel'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ padding: '6px 16px', fontSize: '12px', background: '#ef4444', borderColor: '#dc2626', color: '#fff' }}
+              onClick={handleConfirmDeletePreset}
+            >
+              {lang === 'zh' ? '确认删除' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // 行级编辑：直接修改产品的某一个特定属性 (如价格、名称、型号、分类等)
@@ -1364,7 +1449,7 @@ export default function Sidebar({
                               alignItems: 'center',
                               justifyContent: 'center'
                             }}
-                            onClick={(e) => handleDeletePreset(e, preset.type)}
+                            onClick={(e) => handleDeletePreset(e, preset)}
                             title="从产品库中永久删除此产品"
                           >
                             <Icons.Trash2 size={isPresetsManagerMode ? 14 : 10} />
@@ -1592,6 +1677,7 @@ export default function Sidebar({
           </div>
         </div>
         {renderMergeImportModal()}
+        {renderDeleteConfirmModal()}
       </>
     );
   }
@@ -1878,6 +1964,7 @@ export default function Sidebar({
         </div>
       )}
       {renderMergeImportModal()}
+      {renderDeleteConfirmModal()}
     </aside>
   );
 }
