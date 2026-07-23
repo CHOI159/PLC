@@ -11,7 +11,9 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "upload": "git add . && git commit -m \"sync update\" && git push",
+    "continue": "git pull"
   },
   "dependencies": {
     "lucide-react": "^0.479.0",
