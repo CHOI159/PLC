@@ -49,6 +49,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 全局覆盖原生 select 下拉选项的样式，防止深色模式下展开出现浅色背景和看不清的白字 */
+select option {
+  background-color: #111827 !important;
+  color: #f3f4f6 !important;
+}
+
 #root {
   display: flex;
   flex-direction: column;
