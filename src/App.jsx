@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FilePlus, 
   FolderOpen, 
@@ -13,6 +13,7 @@ import {
 import Sidebar, { PRESET_DEVICES } from './components/Sidebar';
 import * as Icons from 'lucide-react';
 import PropertyPanel from './components/PropertyPanel';
+import { syncDeviceRooms, isPointInPolygon } from './utils/geo';
 
 // 计算朝上方向的伞形扇形路径 (用于 PDF 打印导出渲染)
 const getFovPath = (range = 160, angle = 80) => {
@@ -293,19 +294,38 @@ export default function App() {
   const handleUpdateRooms = (newRooms) => {
     setTabs(prev => prev.map(tab => {
       if (tab.id === activeTabId) {
-        return { ...tab, rooms: newRooms };
+        const syncedDevices = syncDeviceRooms(tab.devices || [], newRooms);
+        return { ...tab, rooms: newRooms, devices: syncedDevices };
       }
       return tab;
     }));
   };
 
-  const [selectedElement, setSelectedElement] = useState(null); // { type: 'device'|'wire', id }
+  const [selectedElement, setSelectedElement] = useState(null); // { type: 'device'|'wire'|'room', id }
   const [canvasMode, setCanvasMode] = useState('select'); // 'select' | 'wire-live' | 'wire-neutral' | 'draw-room-polygon'
-  
-  // 视角偏移状态
+  const [historyStack, setHistoryStack] = useState([]);
+  const [clipboard, setClipboard] = useState(null);
+
+  // 视角偏移与工本费折算状态
   const [scale, setScale] = useState(1.0);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [extraCosts, setExtraCosts] = useState({ labor: '', discount: 0 });
+
+  // 项目更改追踪状态 (脏标记，防误关)
+  const [isDirty, setIsDirty] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const isInitialMount = useRef(true);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    setIsDirty(true);
+    if (window.electronAPI && typeof window.electronAPI.setIsDirty === 'function') {
+      window.electronAPI.setIsDirty(true);
+    }
+  }, [tabs, versions, projectName, extraCosts]);
 
   // 1. 切换当前的方案版本
   const handleSwitchVersion = (targetVersionId) => {
@@ -629,21 +649,78 @@ export default function App() {
     setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, ...updatedFields } : t));
   };
 
-  // 绑定全局 Delete 键删除选中元素
+  // 绑定全局键盘快捷键 (Ctrl+C 复制, Ctrl+V 粘贴, Ctrl+Z 撤销, Delete 删除)
   useEffect(() => {
     const handleKeyDown = (e) => {
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA' || document.activeElement?.isContentEditable) {
+        return;
+      }
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      // Ctrl + Z: 撤销
+      if (isCtrlOrCmd && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Ctrl + C: 复制
+      if (isCtrlOrCmd && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        handleCopy();
+        return;
+      }
+
+      // Ctrl + V: 粘贴
+      if (isCtrlOrCmd && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault();
+        handlePaste();
+        return;
+      }
+
+      // Delete / Backspace: 删除选中元素
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') {
-          return;
-        }
         if (selectedElement) {
+          e.preventDefault();
           handleDeleteElement(selectedElement.id, selectedElement.type);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedElement, tabs, activeTabId]);
+  }, [selectedElement, tabs, activeTabId, clipboard, historyStack]);
+
+  // 监听 Electron 软件退出时的未保存保存提示 IPC 与网页端 beforeunload 拦截
+  const handleSaveProjectRef = useRef(null);
+
+  useEffect(() => {
+    handleSaveProjectRef.current = handleSaveProject;
+  });
+
+  useEffect(() => {
+    if (window.electronAPI && typeof window.electronAPI.onShowCloseConfirmDialog === 'function') {
+      const unsubscribe = window.electronAPI.onShowCloseConfirmDialog(() => {
+        setShowCloseModal(true);
+      });
+      return () => {
+        if (typeof unsubscribe === 'function') unsubscribe();
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = '当前项目存在未保存的修改，确定要退出关闭吗？';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
 
   // 新建项目
   const handleNewProject = () => {
@@ -759,7 +836,11 @@ export default function App() {
       showFov: preset.showFov !== undefined ? preset.showFov : false,
       fovRange: preset.fovRange !== undefined ? preset.fovRange : 160,
       fovAngle: preset.fovAngle !== undefined ? preset.fovAngle : 80,
-      fovColor: preset.fovColor || '',
+      strokeWidth: preset.strokeWidth !== undefined ? preset.strokeWidth : 2,
+      showCircleFov: preset.showCircleFov !== undefined ? preset.showCircleFov : false,
+      circleFovRange: preset.circleFovRange !== undefined ? preset.circleFovRange : 120,
+      fovRotation: preset.fovRotation !== undefined ? preset.fovRotation : undefined,
+      showDoubleFov: preset.showDoubleFov !== undefined ? preset.showDoubleFov : false,
       room: preset.room || '未分配', // 新增房间/区域分配属性，默认为未分配
       x: targetX,
       y: targetY
@@ -877,8 +958,98 @@ export default function App() {
     });
   };
 
-  // 删除当前画布中的设备或导线
+  // 保存历史操作快照 (用于 Ctrl+Z 撤销)
+  const pushHistory = () => {
+    if (!currentTab) return;
+    const snapshot = JSON.parse(JSON.stringify({
+      devices: currentTab.devices || [],
+      wires: currentTab.wires || [],
+      rooms: currentTab.rooms || []
+    }));
+    setHistoryStack(prev => [...prev.slice(-29), snapshot]);
+  };
+
+  // 撤销上一步操作 (Ctrl+Z)
+  const handleUndo = () => {
+    if (historyStack.length === 0) return;
+    const lastState = historyStack[historyStack.length - 1];
+    setHistoryStack(prev => prev.slice(0, -1));
+    updateActiveTab({
+      devices: lastState.devices,
+      wires: lastState.wires,
+      rooms: lastState.rooms
+    });
+    setSelectedElement(null);
+  };
+
+  // 复制选中元素 (Ctrl+C)
+  const handleCopy = () => {
+    if (!selectedElement) return;
+    if (selectedElement.type === 'device') {
+      const dev = (devices || []).find(d => d.id === selectedElement.id);
+      if (dev) setClipboard({ type: 'device', data: dev });
+    } else if (selectedElement.type === 'wire') {
+      const wire = (wires || []).find(w => w.id === selectedElement.id);
+      if (wire) setClipboard({ type: 'wire', data: wire });
+    } else if (selectedElement.type === 'room') {
+      const room = (currentRooms || []).find(r => r.id === selectedElement.id);
+      if (room) setClipboard({ type: 'room', data: room });
+    }
+  };
+
+  // 粘贴元素 (Ctrl+V)
+  const handlePaste = () => {
+    if (!clipboard || !clipboard.data) return;
+    pushHistory();
+    if (clipboard.type === 'device') {
+      const newId = `device_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const targetX = Math.max(50, Math.min(1950, (clipboard.data.x || 100) + 30));
+      const targetY = Math.max(50, Math.min(1950, (clipboard.data.y || 100) + 30));
+      
+      const containingRoom = (currentRooms || []).find(r => r.points && isPointInPolygon({ x: targetX, y: targetY }, r.points));
+      const assignedRoom = containingRoom ? containingRoom.name : '未分配';
+
+      const newDev = {
+        ...clipboard.data,
+        id: newId,
+        x: targetX,
+        y: targetY,
+        room: assignedRoom
+      };
+      updateActiveTab({
+        devices: [...devices, newDev]
+      });
+      setSelectedElement({ type: 'device', id: newId });
+    } else if (clipboard.type === 'wire') {
+      const newId = `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newPoints = (clipboard.data.points || []).map(pt => ({ x: pt.x + 30, y: pt.y + 30 }));
+      const newWire = {
+        ...clipboard.data,
+        id: newId,
+        points: newPoints
+      };
+      updateActiveTab({
+        wires: [...wires, newWire]
+      });
+      setSelectedElement({ type: 'wire', id: newId });
+    } else if (clipboard.type === 'room') {
+      const newId = `room_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newPoints = (clipboard.data.points || []).map(pt => ({ x: pt.x + 30, y: pt.y + 30 }));
+      const newRoom = {
+        ...clipboard.data,
+        id: newId,
+        name: `${clipboard.data.name || '房间'} - 副本`,
+        points: newPoints
+      };
+      const updatedRooms = [...(currentRooms || []), newRoom];
+      handleUpdateRooms(updatedRooms);
+      setSelectedElement({ type: 'room', id: newId });
+    }
+  };
+
+  // 删除当前画布中的设备、导线或房间多边形
   const handleDeleteElement = (id, type) => {
+    pushHistory();
     if (type === 'device') {
       updateActiveTab({
         devices: devices.filter(d => d.id !== id)
@@ -887,6 +1058,9 @@ export default function App() {
       updateActiveTab({
         wires: wires.filter(w => w.id !== id)
       });
+    } else if (type === 'room') {
+      const updatedRooms = (currentRooms || []).filter(r => r.id !== id);
+      handleUpdateRooms(updatedRooms);
     }
     setSelectedElement(null);
   };
@@ -1028,15 +1202,25 @@ export default function App() {
     setSelectedElement(null);
     setScale(1.0);
     setOffset({ x: 0, y: 0 });
+    setIsDirty(false);
+    if (window.electronAPI && typeof window.electronAPI.setIsDirty === 'function') {
+      window.electronAPI.setIsDirty(false);
+    }
   };
 
   // 保存项目
   const handleSaveProject = async () => {
     const state = getProjectState();
+    let isSuccess = false;
     if (window.electronAPI) {
       const res = await window.electronAPI.saveProject(state);
       if (res.success) {
+        setIsDirty(false);
+        if (window.electronAPI && typeof window.electronAPI.setIsDirty === 'function') {
+          window.electronAPI.setIsDirty(false);
+        }
         showAlert('保存成功', `项目已成功保存至：\n${res.filePath}`);
+        isSuccess = true;
       } else if (!res.cancelled) {
         showAlert('保存失败', res.error);
       }
@@ -1048,7 +1232,13 @@ export default function App() {
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
+      setIsDirty(false);
+      if (window.electronAPI && typeof window.electronAPI.setIsDirty === 'function') {
+        window.electronAPI.setIsDirty(false);
+      }
+      isSuccess = true;
     }
+    return isSuccess;
   };
 
   // 导入项目
@@ -2094,6 +2284,147 @@ export default function App() {
               >
                 确定
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 高颜值暗黑毛玻璃风格 - 退出软件未保存二次确认弹窗 */}
+      {showCloseModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: 'rgba(0, 0, 0, 0.72)',
+          zIndex: 99999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backdropFilter: 'blur(6px)'
+        }}>
+          <div style={{
+            background: '#1e293b',
+            border: '1px solid var(--border-color)',
+            borderRadius: '16px',
+            padding: '24px',
+            width: '380px',
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                background: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Icons.AlertTriangle size={22} style={{ color: '#f59e0b' }} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, color: '#fff', fontSize: '15px', fontWeight: 700 }}>
+                  {lang === 'zh' ? '未保存的项目更改' : 'Unsaved Project Changes'}
+                </h3>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {lang === 'zh' ? '软件即将关闭' : 'Application Close Prompt'}
+                </span>
+              </div>
+            </div>
+
+            <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px', lineHeight: 1.6 }}>
+              {lang === 'zh' 
+                ? '当前项目存在尚未保存的修改。如果选择不保存直接退出，在此项目中进行的所有新修改都将丢失！'
+                : 'The current project contains unsaved changes. If you exit without saving, all new modifications will be lost!'}
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{
+                  width: '100%',
+                  height: '36px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: 'var(--color-primary)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  cursor: 'pointer'
+                }}
+                onClick={async () => {
+                  setShowCloseModal(false);
+                  const saved = await handleSaveProject();
+                  if (saved) {
+                    setIsDirty(false);
+                    if (window.electronAPI && typeof window.electronAPI.forceCloseApp === 'function') {
+                      window.electronAPI.forceCloseApp();
+                    } else {
+                      window.close();
+                    }
+                  }
+                }}
+              >
+                <Save size={15} />
+                <span>{lang === 'zh' ? '保存项目并退出' : 'Save & Exit'}</span>
+              </button>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1,
+                    height: '34px',
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#ef4444',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                  onClick={() => {
+                    setShowCloseModal(false);
+                    setIsDirty(false);
+                    if (window.electronAPI && typeof window.electronAPI.forceCloseApp === 'function') {
+                      window.electronAPI.forceCloseApp();
+                    } else {
+                      window.close();
+                    }
+                  }}
+                >
+                  {lang === 'zh' ? '不保存直接退出' : 'Exit Without Saving'}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{
+                    flex: 1,
+                    height: '34px',
+                    fontSize: '12.5px',
+                    fontWeight: 500,
+                    borderRadius: '8px',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => setShowCloseModal(false)}
+                >
+                  {lang === 'zh' ? '取消' : 'Cancel'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

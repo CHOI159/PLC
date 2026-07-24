@@ -383,6 +383,29 @@ export default function PropertyPanel({
                     </div>
                   </div>
 
+                  {/* 新增：图标描边粗细 (PX) 自定义调节 */}
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {lang === 'zh' ? '图标描边粗细 (PX)' : 'Icon Border/Stroke (PX)'}
+                      </label>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-primary)' }}>
+                        {(selectedDevice.strokeWidth !== undefined ? selectedDevice.strokeWidth : 2)} px
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="range"
+                        min="1"
+                        max="8"
+                        step="0.5"
+                        value={selectedDevice.strokeWidth !== undefined ? selectedDevice.strokeWidth : 2}
+                        onChange={(e) => onUpdateDevice(selectedDevice.id, { strokeWidth: parseFloat(e.target.value) || 2 })}
+                        style={{ flex: 1, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                      />
+                    </div>
+                  </div>
+
                   {/* 新增：设备所属房间/区域分配 (使用高保真行内输入，杜绝弹窗拦截) */}
                   <div className="form-group" style={{ marginTop: '12px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>

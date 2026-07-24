@@ -343,6 +343,10 @@ export default function EditorCanvas({
       }
       if (e.code === 'Escape') {
         setActiveWirePoints([]);
+        setPendingRoomPoints([]);
+        onSelectElement && onSelectElement(null);
+        setSpotlightRoomId(null);
+        onChangeCanvasMode && onChangeCanvasMode('select');
         setContextMenu({ show: false, x: 0, y: 0, targetId: null });
       }
     };
@@ -510,20 +514,21 @@ export default function EditorCanvas({
       return;
     }
 
-    if (canvasMode === 'select' && (e.target.tagName === 'svg' || e.target.tagName === 'rect' && e.target.fill === 'url(#grid)')) {
+    if (canvasMode === 'select') {
       setDragState({
         type: 'pan',
         startX: e.clientX,
         startY: e.clientY,
         startOffset: { ...offset }
       });
-      onSelectElement(null);
+      onSelectElement && onSelectElement(null);
       setSpotlightRoomId(null);
     }
   };
 
   // 激活拖拽设备移动
   const handleDeviceDragStart = (e, devId) => {
+    if (e.button !== 0 || isSpacePressed) return; // 仅限左键拖拽设备；中键/右键/空格键直接放行冒泡用于画布拖拽平移
     if (canvasMode !== 'select') return; // 画线模式下不予拦截冒泡，直接放行，支持设备磁吸起笔与落笔
     e.stopPropagation();
     
@@ -541,6 +546,7 @@ export default function EditorCanvas({
 
   // 激活拖拽旋转手柄
   const handleDeviceRotateStart = (e, devId) => {
+    if (e.button !== 0 || isSpacePressed) return;
     e.stopPropagation();
     e.preventDefault();
     if (canvasMode !== 'select') return;
@@ -565,6 +571,7 @@ export default function EditorCanvas({
 
   // 激活拖拽雷达旋转手柄
   const handleRadarRotateStart = (e, devId) => {
+    if (e.button !== 0 || isSpacePressed) return;
     e.stopPropagation();
     e.preventDefault();
     if (canvasMode !== 'select') return;
@@ -589,6 +596,7 @@ export default function EditorCanvas({
 
   // 激活拖拽等比缩放手柄 ("拱门")
   const handleDeviceResizeStart = (e, devId) => {
+    if (e.button !== 0 || isSpacePressed) return;
     e.stopPropagation();
     e.preventDefault();
     if (canvasMode !== 'select') return;
@@ -614,6 +622,7 @@ export default function EditorCanvas({
 
   // 连线折点拖动
   const handleWirePointDragStart = (e, wireId, index) => {
+    if (e.button !== 0 || isSpacePressed) return;
     e.stopPropagation();
     if (canvasMode !== 'select') return;
 
@@ -679,8 +688,7 @@ export default function EditorCanvas({
       const finalX = Math.round(newX);
       const finalY = Math.round(newY);
       const containingRoom = rooms.find(r => isPointInPolygon({ x: finalX, y: finalY }, r.points));
-      const targetDev = devices.find(d => d.id === dragState.targetId);
-      const assignedRoom = containingRoom ? containingRoom.name : (targetDev?.room || '未分配');
+      const assignedRoom = containingRoom ? containingRoom.name : '未分配';
 
       onUpdateDevice(dragState.targetId, {
         x: finalX,
@@ -892,7 +900,7 @@ export default function EditorCanvas({
     setContextMenu({ show: false, x: 0, y: 0, targetId: null });
   };
 
-  const renderDeviceSVGIcon = (iconName, color = '#3b82f6') => {
+  const renderDeviceSVGIcon = (iconName, color = '#3b82f6', strokeWidth = 2) => {
     const IconComponent = Icons[iconName] || Icons.Cpu;
     return (
       <foreignObject x="-16" y="-16" width="32" height="32" style={{ pointerEvents: 'none' }}>
@@ -904,7 +912,7 @@ export default function EditorCanvas({
           height: '100%',
           color: color,
         }}>
-          <IconComponent size={20} />
+          <IconComponent size={20} strokeWidth={strokeWidth} />
         </div>
       </foreignObject>
     );
@@ -1497,6 +1505,7 @@ export default function EditorCanvas({
                   transform={`translate(${badgeX}, ${badgeY}) scale(${roomBadgeScale})`}
                   style={{ cursor: 'move', pointerEvents: 'auto' }}
                   onMouseDown={(e) => {
+                    if (e.button !== 0 || isSpacePressed) return;
                     e.stopPropagation();
                     setDragState({
                       type: 'room-label',
@@ -1586,6 +1595,7 @@ export default function EditorCanvas({
                   strokeWidth={2.5}
                   style={{ cursor: 'move', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))' }}
                   onMouseDown={(e) => {
+                    if (e.button !== 0 || isSpacePressed) return;
                     e.stopPropagation();
                     setDragState({
                       type: 'room-vertex',
@@ -1919,7 +1929,7 @@ export default function EditorCanvas({
                       style={{
                         filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3))',
                         stroke: isSelected ? 'var(--color-primary)' : (dev.color || '#3b82f6'),
-                        strokeWidth: isSelected ? 2.5 : 1.5
+                        strokeWidth: isSelected ? ((dev.strokeWidth || 2) + 0.8) : (dev.strokeWidth !== undefined ? dev.strokeWidth : 1.5)
                       }}
                     />
                   )}
@@ -1947,8 +1957,11 @@ export default function EditorCanvas({
                         width="48"
                         height="48"
                         className={`svg-device-bg ${dev.id === highlightedDeviceId ? 'pulse-focus' : ''}`}
+                        style={{
+                          strokeWidth: dev.strokeWidth !== undefined ? dev.strokeWidth : (isSelected ? 2.5 : 1.5)
+                        }}
                       />
-                      {renderDeviceSVGIcon(dev.icon || 'Cpu', devColor)}
+                      {renderDeviceSVGIcon(dev.icon || 'Cpu', devColor, dev.strokeWidth !== undefined ? dev.strokeWidth : 2)}
                     </>
                   )}
                 </g>

@@ -42,7 +42,27 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
+
+  mainWindow.on('close', (e) => {
+    if (mainWindow.isForceClose || !mainWindow.isDirty) return;
+    e.preventDefault();
+    mainWindow.webContents.send('show-close-confirm-dialog');
+  });
 }
+
+ipcMain.on('set-is-dirty', (event, isDirty) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.isDirty = isDirty;
+  }
+});
+
+ipcMain.on('force-close-app', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.isForceClose = true;
+    mainWindow.destroy();
+  }
+  app.quit();
+});
 
 let isPresetsOnlyMode = false;
 
